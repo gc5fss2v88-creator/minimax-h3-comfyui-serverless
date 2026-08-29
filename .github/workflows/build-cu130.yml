@@ -34,7 +34,7 @@ jobs:
           context: .
           file: Dockerfile.cu130
           push: true
-          tags: ghcr.io/vincezh2000/minimax-h3-comfyui-serverless:cu130-code
+          tags: ghcr.io/gc5fss2v88-creator/minimax-h3-comfyui-serverless:cu130-code
           provenance: false
       - name: Install crane
         uses: imjasonh/setup-crane@v0.4
