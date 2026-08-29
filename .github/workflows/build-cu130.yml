@@ -48,7 +48,7 @@ jobs:
           crane auth login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
           WORK=/mnt/weights
           sudo mkdir -p "$WORK" && sudo chown "$USER" "$WORK"
-          IMG=ghcr.io/vincezh2000/minimax-h3-comfyui-serverless
+          IMG=ghcr.io/gc5fss2v88-creator/minimax-h3-comfyui-serverless
           BASE="$IMG:cu130-code"
           append() { # $1 models subdir, $2 filename, $3 url
             mkdir -p "$WORK/stage/comfyui/models/$1"
