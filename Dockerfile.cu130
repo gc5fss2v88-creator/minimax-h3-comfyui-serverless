@@ -30,3 +30,7 @@ RUN /opt/venv/bin/python /tmp/check_arch.py sm_90 sm_120 && rm /tmp/check_arch.p
 
 # Weights are appended as separate layers by the build workflow (see .github/workflows/build-cu130.yml).
 RUN mkdir -p /comfyui/models/diffusion_models /comfyui/models/text_encoders /comfyui/models/vae
+RUN mkdir -p /comfyui/custom_nodes && \
+    git clone --depth 1 \
+    https://github.com/duckyshell/ComfyUI-MiniMaxH3-FirstBlockCache.git \
+    /comfyui/custom_nodes/ComfyUI-MiniMaxH3-FirstBlockCache
