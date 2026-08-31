@@ -5,6 +5,8 @@ on:
     paths:
       - Dockerfile.cu130
       - check_arch.py
+      - patch_handler_compat.py
+      - start-cache.sh
       - .github/workflows/build-cu130.yml
   workflow_dispatch:
 
