@@ -34,3 +34,7 @@ RUN mkdir -p /comfyui/custom_nodes && \
     git clone --depth 1 \
     https://github.com/duckyshell/ComfyUI-MiniMaxH3-FirstBlockCache.git \
     /comfyui/custom_nodes/ComfyUI-MiniMaxH3-FirstBlockCache
+COPY start-cache.sh /start-cache.sh
+RUN chmod +x /start-cache.sh
+
+CMD ["/start-cache.sh"]
