@@ -4,6 +4,43 @@ from pathlib import Path
 path = Path("/handler.py")
 text = path.read_text()
 
+old_actions = '''    job_input = job["input"]
+    job_id = job["id"]
+
+    # Make sure that the input is valid
+'''
+
+new_actions = '''    job_input = job["input"]
+    job_id = job["id"]
+
+    # RunOnRunpod probes the worker before submitting a workflow.
+    action = job_input.get("action") if isinstance(job_input, dict) else None
+    if action == "version":
+        return {
+            "status": "ok",
+            "worker_version": os.environ.get("WORKER_VERSION", "h3-cu130"),
+            "protocol_version": 1,
+            "cuda_version": "13.0",
+            "pytorch_version": "",
+            "comfyui_version": "v0.30.1",
+        }
+    if action == "node_list":
+        try:
+            response = requests.get(f"http://{COMFY_HOST}/object_info", timeout=30)
+            response.raise_for_status()
+            node_list = list(response.json().keys())
+        except Exception as exc:
+            print(f"worker-comfyui - Could not read ComfyUI node list: {exc}")
+            node_list = []
+        return {"node_list": node_list}
+
+    # Make sure that the input is valid
+'''
+
+if old_actions not in text:
+    raise SystemExit("Expected handler entry block was not found")
+text = text.replace(old_actions, new_actions, 1)
+
 old = '''    # Validate 'workflow' in input
     workflow = job_input.get("workflow")
     if workflow is None:
