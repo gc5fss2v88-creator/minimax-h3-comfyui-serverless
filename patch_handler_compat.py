@@ -33,6 +33,24 @@ new_actions = '''    job_input = job["input"]
             print(f"worker-comfyui - Could not read ComfyUI node list: {exc}")
             node_list = []
         return {"node_list": node_list}
+    if action == "fetch_models":
+        # The plugin will fall back to its local upload when a worker fetch
+        # is unavailable. Returning a normal action result avoids the stock
+        # worker's "Missing workflow" error during that preparation step.
+        downloads = job_input.get("downloads") or []
+        return {
+            "action": "fetch_models",
+            "total": len(downloads),
+            "results": [
+                {
+                    "filename": Path(str(item.get("dest_path", ""))).name,
+                    "status": "failed",
+                    "error": "Using local upload fallback",
+                }
+                for item in downloads
+                if isinstance(item, dict) and item.get("dest_path")
+            ],
+        }
 
     # Make sure that the input is valid
 '''
