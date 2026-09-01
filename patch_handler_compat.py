@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -131,11 +132,23 @@ text = text.replace(old, new, 1)
 # Copy plugin-uploaded inputs into ComfyUI's input directory. Without this,
 # the stock handler validates the workflow before it can see the uploaded
 # image and reports "Invalid image file".
-old_queue = '''    queued_workflow = queue_workflow(\n'''
-new_queue = '''    input_files = job_input.get("input_files", {})\n    if input_files:\n        for filename, s3_key in input_files.items():\n            source = os.path.join("/runpod-volume", str(s3_key))\n            destination = os.path.join("/comfyui/input", str(filename))\n            os.makedirs(os.path.dirname(destination), exist_ok=True)\n            print(f"RunOnRunpod - Copying input: {source} -> {destination}")\n            shutil.copy2(source, destination)\n\n    queued_workflow = queue_workflow(\n'''
-if old_queue not in text:
+queue_match = re.search(r"(?m)^([ \\t]+)queued_workflow = queue_workflow\\(\\n", text)
+if not queue_match:
     raise SystemExit("Expected queue_workflow call was not found")
-text = text.replace(old_queue, new_queue, 1)
+indent = queue_match.group(1)
+child_indent = indent + "    "
+new_queue = (
+    f"{indent}input_files = job_input.get(\"input_files\", {{}})\\n"
+    f"{indent}if input_files:\\n"
+    f"{child_indent}for filename, s3_key in input_files.items():\\n"
+    f"{child_indent}    source = os.path.join(\"/runpod-volume\", str(s3_key))\\n"
+    f"{child_indent}    destination = os.path.join(\"/comfyui/input\", str(filename))\\n"
+    f"{child_indent}    os.makedirs(os.path.dirname(destination), exist_ok=True)\\n"
+    f"{child_indent}    print(f\"RunOnRunpod - Copying input: {{source}} -> {{destination}}\")\\n"
+    f"{child_indent}    shutil.copy2(source, destination)\\n\\n"
+    f"{indent}queued_workflow = queue_workflow(\\n"
+)
+text = text[:queue_match.start()] + new_queue + text[queue_match.end():]
 
 path.write_text(text)
 print("Patched /handler.py for RunOnRunpod compatibility")
