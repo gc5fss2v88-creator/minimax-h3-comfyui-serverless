@@ -35,7 +35,7 @@ new_actions = '''    job_input = job["input"]
             "BasicGuider", "BasicScheduler", "CLIPLoader", "ComfyMathExpression",
             "ComfySwitchNode", "CreateVideo", "GetImageSize",
             "ImageScaleToTotalPixels", "KSamplerSelect", "LoadImage",
-            "LoraLoaderModelOnly", "MiniMaxH3ImageToVideo", "PrimitiveBoolean",
+            "LoraLoaderModelOnly", "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo", "PrimitiveBoolean",
             "PrimitiveFloat", "PrimitiveInt", "RandomNoise", "ResolutionSelector",
             "SamplerCustomAdvanced", "SaveVideo", "UNETLoader", "VAEDecode",
             "VAEDecodeAudio", "VAELoader",
