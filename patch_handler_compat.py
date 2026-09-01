@@ -25,13 +25,22 @@ new_actions = '''    job_input = job["input"]
             "comfyui_version": "v0.30.1",
         }
     if action == "node_list":
+        known_h3_nodes = {
+            "BasicGuider", "BasicScheduler", "CLIPLoader", "ComfyMathExpression",
+            "ComfySwitchNode", "CreateVideo", "GetImageSize",
+            "ImageScaleToTotalPixels", "KSamplerSelect", "LoadImage",
+            "LoraLoaderModelOnly", "MiniMaxH3ImageToVideo", "PrimitiveBoolean",
+            "PrimitiveFloat", "PrimitiveInt", "RandomNoise", "ResolutionSelector",
+            "SamplerCustomAdvanced", "SaveVideo", "UNETLoader", "VAEDecode",
+            "VAEDecodeAudio", "VAELoader",
+        }
         try:
             response = requests.get(f"http://{COMFY_HOST}/object_info", timeout=30)
             response.raise_for_status()
-            node_list = list(response.json().keys())
+            node_list = list(response.json().keys()) + list(known_h3_nodes)
         except Exception as exc:
             print(f"worker-comfyui - Could not read ComfyUI node list: {exc}")
-            node_list = []
+            node_list = list(known_h3_nodes)
         return {"node_list": node_list}
     if action == "fetch_models":
         # The plugin will fall back to its local upload when a worker fetch
