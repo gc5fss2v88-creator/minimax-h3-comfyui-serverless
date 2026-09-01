@@ -4,6 +4,11 @@ from pathlib import Path
 path = Path("/handler.py")
 text = path.read_text()
 
+# The stock RunPod handler does not copy the plugin's input_files from the
+# Network Volume before validating LoadImage nodes.
+if "import shutil" not in text:
+    text = "import shutil\n" + text
+
 old_actions = '''    job_input = job["input"]
     job_id = job["id"]
 
@@ -121,5 +126,16 @@ new = '''    # Accept both the standard worker API and ComfyUI-RunOnRunpod.
 if old not in text:
     raise SystemExit("Expected worker validation block was not found")
 
-path.write_text(text.replace(old, new, 1))
+text = text.replace(old, new, 1)
+
+# Copy plugin-uploaded inputs into ComfyUI's input directory. Without this,
+# the stock handler validates the workflow before it can see the uploaded
+# image and reports "Invalid image file".
+old_queue = '''    queued_workflow = queue_workflow(\n'''
+new_queue = '''    input_files = job_input.get("input_files", {})\n    if input_files:\n        for filename, s3_key in input_files.items():\n            source = os.path.join("/runpod-volume", str(s3_key))\n            destination = os.path.join("/comfyui/input", str(filename))\n            os.makedirs(os.path.dirname(destination), exist_ok=True)\n            print(f"RunOnRunpod - Copying input: {source} -> {destination}")\n            shutil.copy2(source, destination)\n\n    queued_workflow = queue_workflow(\n'''
+if old_queue not in text:
+    raise SystemExit("Expected queue_workflow call was not found")
+text = text.replace(old_queue, new_queue, 1)
+
+path.write_text(text)
 print("Patched /handler.py for RunOnRunpod compatibility")
