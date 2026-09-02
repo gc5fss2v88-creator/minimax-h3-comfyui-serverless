@@ -29,7 +29,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq aria2
           crane auth login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
-          root=/mnt/h3-mxfp8; mkdir -p "$root"; base="$IMAGE:mxfp8-candidate-code"
+          root="$RUNNER_TEMP/h3-mxfp8"; mkdir -p "$root"; base="$IMAGE:mxfp8-candidate-code"
           append() { rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$1"; aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$root/stage/comfyui/models/$1" -o "$2" "$3"; tar --owner=0 --group=0 -cf "$root/layer.tar" -C "$root/stage" comfyui; crane append -b "$base" -f "$root/layer.tar" -t "$IMAGE:mxfp8-candidate-wip"; base="$IMAGE:mxfp8-candidate-wip"; rm -rf "$root/stage" "$root/layer.tar"; }
           H=https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main
           G=https://huggingface.co/rzgar/minimax_h3_fl2va_fp8_e4m3fn/resolve/main
