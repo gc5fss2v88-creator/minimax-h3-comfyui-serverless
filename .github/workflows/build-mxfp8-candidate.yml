@@ -22,21 +22,10 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/minimax-h3-blackwell:mxfp8-candidate-code
           provenance: false
-      - uses: imjasonh/setup-crane@v0.4
-      - name: Append candidate model layers
+      - name: Publish candidate code image
         env: {IMAGE: 'ghcr.io/${{ github.repository_owner }}/minimax-h3-blackwell'}
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y -qq aria2
-          crane auth login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
-          root="$RUNNER_TEMP/h3-mxfp8"; mkdir -p "$root"; base="$IMAGE:mxfp8-candidate-code"
-          append() { rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$1"; aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$root/stage/comfyui/models/$1" -o "$2" "$3"; tar --owner=0 --group=0 -cf "$root/layer.tar" -C "$root/stage" comfyui; crane append -b "$base" -f "$root/layer.tar" -t "$IMAGE:mxfp8-candidate-wip"; base="$IMAGE:mxfp8-candidate-wip"; rm -rf "$root/stage" "$root/layer.tar"; }
-          H=https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main
-          G=https://huggingface.co/rzgar/minimax_h3_fl2va_fp8_e4m3fn/resolve/main
-          append text_encoders qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors "$H/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
-          append vae minimax_h3_video_vae_fp16.safetensors "$H/vae/minimax_h3_video_vae_fp16.safetensors"
-          append vae minimax_h3_audio_vae_fp32.safetensors "$H/vae/minimax_h3_audio_vae_fp32.safetensors"
-          append diffusion_models minimax_h3_fl2va_mxfp8.safetensors "$G/minimax_h3_fl2va_mxfp8.safetensors"
-          append loras minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors "$H/loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"
-          append loras minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors "$H/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
-          crane tag "$base" mxfp8-candidate
+          docker pull "$IMAGE:mxfp8-candidate-code"
+          docker tag "$IMAGE:mxfp8-candidate-code" "$IMAGE:mxfp8-candidate"
+          docker push "$IMAGE:mxfp8-candidate"
