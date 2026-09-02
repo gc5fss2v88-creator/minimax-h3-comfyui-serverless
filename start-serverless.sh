@@ -3,6 +3,22 @@ set -euo pipefail
 
 echo "[h3-worker] profile=${MODEL_PROFILE:-blackwell_fp8} attention=${ENABLE_ATTENTION:-0}"
 if [[ "${MODEL_PROFILE:-}" == "mxfp8_blackwell_candidate" ]]; then
+  models="${COMFYUI_PATH:-/comfyui}/models"
+  H="${H3_MODEL_BASE_URL:-https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main}"
+  G="${H3_MXFP8_BASE_URL:-https://huggingface.co/rzgar/minimax_h3_fl2va_fp8_e4m3fn/resolve/main}"
+  download() {
+    local dir="$1" file="$2" url="$3"; mkdir -p "$models/$dir"
+    if [[ ! -s "$models/$dir/$file" ]]; then
+      echo "[h3-worker] downloading $dir/$file"
+      aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$models/$dir" -o "$file" "$url"
+    fi
+  }
+  download diffusion_models minimax_h3_fl2va_mxfp8.safetensors "$G/minimax_h3_fl2va_mxfp8.safetensors"
+  download text_encoders qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors "$H/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+  download vae minimax_h3_video_vae_fp16.safetensors "$H/vae/minimax_h3_video_vae_fp16.safetensors"
+  download vae minimax_h3_audio_vae_fp32.safetensors "$H/vae/minimax_h3_audio_vae_fp32.safetensors"
+  download loras minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"
+  download loras minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
   python3 - <<'PY'
 import torch
 import comfy_kitchen
