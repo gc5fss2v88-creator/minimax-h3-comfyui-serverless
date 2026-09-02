@@ -1,12 +1,12 @@
-name: build-h3-blackwell
+name: build-h3-mxfp8-candidate
 on:
   workflow_dispatch:
   push:
-    paths: [Dockerfile.cu130, check_arch.py, handler.py, workflows/**, requirements-worker.txt, .github/workflows/build.yml]
+    paths: [Dockerfile.mxfp8-candidate, handler.py, workflows/h3_i2v_mxfp8_api.json, requirements-worker.txt, .github/workflows/build-mxfp8-candidate.yml]
 jobs:
-  code:
+  candidate:
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 180
     permissions: {contents: read, packages: write}
     steps:
       - uses: jlumbroso/free-disk-space@main
@@ -14,40 +14,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.cu130
+          file: Dockerfile.mxfp8-candidate
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/minimax-h3-blackwell:cu130-code
+          tags: ghcr.io/${{ github.repository_owner }}/minimax-h3-blackwell:mxfp8-candidate-code
           provenance: false
       - uses: imjasonh/setup-crane@v0.4
-      - name: Append model layers
-        env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/minimax-h3-blackwell
+      - name: Append candidate model layers
+        env: {IMAGE: 'ghcr.io/${{ github.repository_owner }}/minimax-h3-blackwell'}
         run: |
           set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq aria2
           crane auth login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
-          root=/mnt/h3-weights; mkdir -p "$root"
-          base="$IMAGE:cu130-code"
-          append() {
-            dir="$1"; file="$2"; url="$3"; rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$dir"
-            aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$root/stage/comfyui/models/$dir" -o "$file" "$url"
-            tar --owner=0 --group=0 -cf "$root/layer.tar" -C "$root/stage" comfyui
-            crane append -b "$base" -f "$root/layer.tar" -t "$IMAGE:wip"
-            base="$IMAGE:wip"; rm -rf "$root/stage" "$root/layer.tar"
-          }
+          root=/mnt/h3-mxfp8; mkdir -p "$root"; base="$IMAGE:mxfp8-candidate-code"
+          append() { rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$1"; aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$root/stage/comfyui/models/$1" -o "$2" "$3"; tar --owner=0 --group=0 -cf "$root/layer.tar" -C "$root/stage" comfyui; crane append -b "$base" -f "$root/layer.tar" -t "$IMAGE:mxfp8-candidate-wip"; base="$IMAGE:mxfp8-candidate-wip"; rm -rf "$root/stage" "$root/layer.tar"; }
           H=https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main
-          append diffusion_models minimax_h3_fl2va_pruned_fp8_scaled.safetensors "$H/diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors"
+          G=https://huggingface.co/rzgar/minimax_h3_fl2va_fp8_e4m3fn/resolve/main
           append text_encoders qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors "$H/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
           append vae minimax_h3_video_vae_fp16.safetensors "$H/vae/minimax_h3_video_vae_fp16.safetensors"
           append vae minimax_h3_audio_vae_fp32.safetensors "$H/vae/minimax_h3_audio_vae_fp32.safetensors"
+          append diffusion_models minimax_h3_fl2va_mxfp8.safetensors "$G/minimax_h3_fl2va_mxfp8.safetensors"
           append loras minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors "$H/loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"
           append loras minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors "$H/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
-          crane tag "$base" latest
-
+          crane tag "$base" mxfp8-candidate
