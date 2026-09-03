@@ -1,0 +1,54 @@
+# Independent SageAttention candidate. Production and MXFP8 baseline Dockerfiles
+# are intentionally untouched.
+# syntax=docker/dockerfile:1.7
+FROM runpod/worker-comfyui:5.8.6-base
+
+ARG COMFYUI_TAG=v0.32.0
+WORKDIR /comfyui
+COPY requirements-worker.txt /tmp/requirements-worker.txt
+
+RUN git fetch --depth 1 origin refs/tags/${COMFYUI_TAG} && git checkout FETCH_HEAD && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements-worker.txt && \
+    /opt/venv/bin/pip install --no-cache-dir --force-reinstall torch==2.12.0 torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu130 && \
+    /opt/venv/bin/pip install --no-cache-dir comfy-kitchen && \
+    /opt/venv/bin/pip install --no-cache-dir ninja packaging wheel && \
+    /opt/venv/bin/pip install --no-cache-dir --no-build-isolation sageattention==2.2.0
+
+RUN apt-get update -qq && apt-get install -y -qq aria2 && rm -rf /var/lib/apt/lists/*
+
+COPY check_arch.py /tmp/check_arch.py
+RUN /opt/venv/bin/python /tmp/check_arch.py sm_120 && rm /tmp/check_arch.py
+
+# Fail the candidate build if the SageAttention extension cannot import in the
+# exact Python/Torch environment shipped in this image.
+RUN /opt/venv/bin/python - <<'PY'
+import torch
+import sageattention
+from sageattention import sageattn
+print(f"[sage-candidate] sageattention={getattr(sageattention, '__version__', 'unknown')}")
+print(f"[sage-candidate] torch={torch.__version__} cuda={torch.version.cuda}")
+print(f"[sage-candidate] sageattn={sageattn}")
+PY
+
+# Verify the pinned ComfyUI release exposes the exact runtime switch used by
+# start-serverless.sh. This does not enable it in the baseline image.
+RUN /opt/venv/bin/python /comfyui/main.py --help 2>&1 | grep -q -- '--use-sage-attention'
+
+COPY handler.py /handler.py
+COPY profiling.py /profiling.py
+COPY workflows/h3_i2v_mxfp8_api.json /workflows/h3_i2v_api.json
+COPY start-serverless.sh /start-serverless.sh
+RUN chmod +x /start-serverless.sh && \
+    mkdir -p /comfyui/models/diffusion_models /comfyui/models/text_encoders /comfyui/models/vae /comfyui/models/loras
+
+ENV COMFYUI_PATH=/comfyui \
+    COMFYUI_PORT=8188 \
+    MODEL_PROFILE=mxfp8_blackwell_candidate \
+    MODEL_VOLUME_PATH=/runpod-volume \
+    ENABLE_ATTENTION=0 \
+    ATTENTION_ARGS=--use-sage-attention \
+    PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["/start-serverless.sh"]
