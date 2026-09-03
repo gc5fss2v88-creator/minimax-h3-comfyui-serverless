@@ -3,7 +3,7 @@
 # syntax=docker/dockerfile:1.7
 FROM runpod/worker-comfyui:5.8.6-base
 
-ARG COMFYUI_TAG=v0.32.0
+ARG COMFYUI_TAG=v0.30.1
 WORKDIR /comfyui
 COPY requirements-worker.txt /tmp/requirements-worker.txt
 
@@ -28,6 +28,7 @@ RUN chmod +x /start-serverless.sh && \
 ENV COMFYUI_PATH=/comfyui \
     COMFYUI_PORT=8188 \
     MODEL_PROFILE=mxfp8_blackwell_candidate \
+    MODEL_VOLUME_PATH=/runpod-volume \
     ENABLE_ATTENTION=0 \
     PYTHONUNBUFFERED=1
 
