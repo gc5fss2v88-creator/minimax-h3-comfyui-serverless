@@ -1,0 +1,30 @@
+# Standalone feature image. Existing MXFP8, Candidate B and Sage images are untouched.
+# This image adds the compact ComfyUI-MiniMaxH3-Easy node pack and Ref2VA provisioning.
+# syntax=docker/dockerfile:1.7
+
+FROM ghcr.io/gc5fss2v88-creator/minimax-h3-blackwell:mxfp8-candidate-code
+
+ARG EASY_REPO=https://github.com/nkxx188/ComfyUI-MiniMaxH3-Easy.git
+ARG EASY_REF=main
+
+RUN git clone --depth 1 --branch "${EASY_REF}" "${EASY_REPO}" \
+      /comfyui/custom_nodes/ComfyUI-MiniMaxH3-Easy && \
+    if [ -f /comfyui/custom_nodes/ComfyUI-MiniMaxH3-Easy/requirements.txt ]; then \
+      /opt/venv/bin/pip install --no-cache-dir -r /comfyui/custom_nodes/ComfyUI-MiniMaxH3-Easy/requirements.txt; \
+    fi
+
+COPY handler.py /handler.py
+COPY profiling.py /profiling.py
+COPY start-feature-easy.sh /start-feature-easy.sh
+COPY docs/UNIFIED_API.md /docs/UNIFIED_API.md
+RUN chmod +x /start-feature-easy.sh
+
+ENV COMFYUI_PATH=/comfyui \
+    COMFYUI_PORT=8188 \
+    MODEL_PROFILE=mxfp8_blackwell_feature_easy \
+    MODEL_VOLUME_PATH=/runpod-volume \
+    FEATURE_EASY=1 \
+    ENABLE_ATTENTION=0 \
+    PYTHONUNBUFFERED=1
+
+ENTRYPOINT ["/start-feature-easy.sh"]

@@ -5,7 +5,7 @@ from typing import Any
 
 COMFY = f"http://127.0.0.1:{os.getenv('COMFYUI_PORT', '8188')}"
 TEMPLATE = pathlib.Path(os.getenv('WORKFLOW_TEMPLATE', str(pathlib.Path(__file__).parent / 'workflows/h3_i2v_api.json')))
-DEFAULTS = {"width": 1344, "height": 768, "duration": 15, "fps": 24, "steps": 8,
+DEFAULTS = {"mode": "i2v", "width": 1344, "height": 768, "duration": 15, "fps": 24, "steps": 8,
             "seed": 42, "sampler": "res_multistep", "scheduler": "simple",
             "cfg": 1.0, "lora_strength": 1.0, "prompt": "", "negative_prompt": ""}
 MODEL = os.getenv("MODEL_PROFILE", "blackwell_fp8")
@@ -17,6 +17,9 @@ def _json(data):
 
 def _params(inp):
     p = {**DEFAULTS, **(inp.get("params") or {})}
+    p["mode"] = str(p["mode"]).lower()
+    if p["mode"] not in ("t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"):
+        raise ValueError("mode must be one of t2v, i2v, fl2v, r2v, v2v, rv2v")
     if p["steps"] not in (4, 6, 8, 20):
         raise ValueError("steps must be one of 4, 6, 8, 20")
     if not (1 <= int(p["duration"]) <= 15):
@@ -35,45 +38,121 @@ def _frames(seconds):
     return max(17, int(round(seconds * 24 / 17)) * 17 + 5)
 
 def _workflow(inp, p):
+    if p["mode"] != "i2v" and not inp.get("workflow"):
+        raise ValueError(f"mode={p['mode']} requires a matching ComfyUI Desktop API workflow")
     wf = copy.deepcopy(inp.get("workflow") or json.loads(TEMPLATE.read_text()))
     # Keep node ids stable in the shipped API template; exported Desktop workflows can
     # also be used when they retain these semantic node types and fields.
-    by_type = {v.get("class_type"): (k, v) for k, v in wf.items() if isinstance(v, dict)}
+    typed = {}
+    for k, v in wf.items():
+        if isinstance(v, dict) and v.get("class_type"):
+            typed.setdefault(v["class_type"], []).append(v)
+
     def node(kind):
-        if kind not in by_type:
+        if kind not in typed:
             raise ValueError(f"workflow is missing required node: {kind}")
-        return by_type[kind][1]["inputs"]
-    cond = node("MiniMaxH3ImageToVideo")
-    cond.update({"prompt": p["prompt"], "width": p["width"], "height": p["height"], "length": _frames(p["duration"])})
-    node("RandomNoise")["noise_seed"] = int(p["seed"])
-    node("KSamplerSelect")["sampler_name"] = p["sampler"]
-    node("BasicScheduler").update({"steps": int(p["steps"]), "scheduler": p["scheduler"]})
-    node("CreateVideo")["fps"] = int(p["fps"])
+        return typed[kind][0]["inputs"]
+
+    def first_node(*kinds):
+        for kind in kinds:
+            if typed.get(kind):
+                return typed[kind][0]
+        return None
+
+    # A supplied ComfyUI Desktop API workflow is authoritative.  The worker only
+    # fills values that have a matching native node, so Director/R2V/V2V graphs
+    # can be sent without forcing them through the I2V template below.
+    cond_node = first_node("MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo")
+    if cond_node is None:
+        if not inp.get("workflow"):
+            raise ValueError("workflow is missing MiniMax H3 I2V/ReferenceToVideo node")
+        # Custom nodes such as MiniMax H3 Easy/Director own their conditioning
+        # schema.  A Desktop API workflow is submitted unchanged; only matching
+        # loader assets below are rebound.
+    else:
+        cond_inputs = cond_node["inputs"]
+        cond_inputs.update({"prompt": p["prompt"], "width": p["width"], "height": p["height"], "length": _frames(p["duration"])})
+    if typed.get("RandomNoise"):
+        node("RandomNoise")["noise_seed"] = int(p["seed"])
+    if typed.get("KSamplerSelect"):
+        node("KSamplerSelect")["sampler_name"] = p["sampler"]
+    if typed.get("BasicScheduler"):
+        node("BasicScheduler").update({"steps": int(p["steps"]), "scheduler": p["scheduler"]})
+    if typed.get("CreateVideo"):
+        node("CreateVideo")["fps"] = int(p["fps"])
     # 6 steps has no separately trained official FL2V LoRA; 8-step is the closest
     # supported Turbo operating point.  20 is the base/reference benchmark.
+    lora_nodes = []
     for _, v in wf.items():
         if isinstance(v, dict) and v.get("class_type") in ("LoraLoaderModelOnly", "LoraLoader"):
+            lora_nodes.append(v)
             v["inputs"]["lora_name"] = LORAS.get(int(p["steps"]), "")
             v["inputs"]["strength_model"] = float(p["lora_strength"])
-    if int(p["steps"]) in (4, 6, 8):
+    if int(p["steps"]) in (4, 6, 8) and "guider" in wf and "unet" in wf:
         chosen = LORAS[4] if int(p["steps"]) == 4 else LORAS[8]
         wf.setdefault("lora", {"class_type": "LoraLoaderModelOnly", "inputs": {}})
         wf["lora"]["inputs"] = {"model": ["unet", 0], "lora_name": chosen, "strength_model": float(p["lora_strength"])}
         wf["guider"]["inputs"]["model"] = ["lora", 0]
-    else:
+    elif "guider" in wf and "unet" in wf:
         wf["guider"]["inputs"]["model"] = ["unet", 0]
-    images = inp.get("images") or []
-    if not images:
-        raise ValueError("I2V requires input.images with one base64 image")
-    # The template contains load_image with first_frame wired to it.
-    load = next((v for v in wf.values() if isinstance(v, dict) and v.get("class_type") == "LoadImage"), None)
-    if load is None:
-        raise ValueError("workflow is missing LoadImage")
-    name = _upload(images[0])
-    load["inputs"]["image"] = name
+    _bind_assets(wf, inp)
     return wf
 
-def _upload(item):
+def _asset_groups(inp):
+    """Accept both the old `images` field and the unified asset contract."""
+    assets = inp.get("assets") or []
+    groups = {"image": list(inp.get("images") or []), "video": [], "audio": []}
+    for asset in assets:
+        kind = str(asset.get("type", "image")).lower()
+        if kind in ("image", "video", "audio"):
+            groups[kind].append(asset)
+    refs = inp.get("references") or {}
+    for kind in groups:
+        for asset in refs.get(f"{kind}s", []) or []:
+            groups[kind].append(asset)
+    return groups
+
+def _bind_assets(wf, inp):
+    groups = _asset_groups(inp)
+    uploaded = {kind: [_upload(x) for x in items] for kind, items in groups.items()}
+    typed = {}
+    for value in wf.values():
+        if isinstance(value, dict) and value.get("class_type"):
+            typed.setdefault(value["class_type"], []).append(value)
+
+    image_nodes = typed.get("LoadImage", [])
+    video_nodes = typed.get("LoadVideo", []) + typed.get("VHS_LoadVideo", [])
+    audio_nodes = typed.get("LoadAudio", []) + typed.get("VHS_LoadAudio", [])
+    # Native H3 graphs use LoadImage/LoadVideo/LoadAudio or their VHS variants.
+    # Bind in graph order; an explicit `slot` can target a particular node.
+    for index, value in enumerate(uploaded["image"]):
+        if index < len(image_nodes):
+            image_nodes[index]["inputs"]["image"] = value
+    for index, value in enumerate(uploaded["video"]):
+        if index < len(video_nodes):
+            video_nodes[index]["inputs"]["video"] = value
+    for index, value in enumerate(uploaded["audio"]):
+        if index < len(audio_nodes):
+            audio_nodes[index]["inputs"]["audio"] = value
+
+    for kind, nodes in (("image", image_nodes), ("video", video_nodes), ("audio", audio_nodes)):
+        if len(uploaded[kind]) > len(nodes):
+            raise ValueError(
+                f"received {len(uploaded[kind])} {kind} assets but workflow has only "
+                f"{len(nodes)} matching loader nodes; add loaders in ComfyUI Desktop"
+            )
+
+    mode = str((inp.get("params") or {}).get("mode", DEFAULTS["mode"])).lower()
+    required = {"i2v": (1, 0, 0), "fl2v": (1, 0, 0), "r2v": (0, 0, 0),
+                "v2v": (0, 1, 0), "rv2v": (0, 1, 0), "t2v": (0, 0, 0)}[mode]
+    if len(uploaded["image"]) < required[0] and mode in ("i2v", "fl2v"):
+        raise ValueError(f"{mode} requires at least one image asset")
+    if len(uploaded["video"]) < required[1] and mode in ("v2v", "rv2v"):
+        raise ValueError(f"{mode} requires at least one video asset")
+    if mode == "r2v" and not any(uploaded.values()):
+        raise ValueError("r2v requires at least one reference image, video, or audio asset")
+
+def _upload(item, asset_type="image"):
     import requests
     name = pathlib.Path(item.get("name", "input.png")).name
     raw = item.get("data") or item.get("base64")
@@ -82,6 +161,8 @@ def _upload(item):
     if "," in raw and raw.startswith("data:"):
         raw = raw.split(",", 1)[1]
     payload = base64.b64decode(raw)
+    # ComfyUI's upload endpoint accepts all input media as multipart content;
+    # the loader node determines whether it is treated as image/video/audio.
     r = requests.post(f"{COMFY}/upload/image", files={"image": (name, payload, "application/octet-stream")},
                       data={"overwrite": "true", "type": "input"}, timeout=120)
     r.raise_for_status()
@@ -122,6 +203,7 @@ def _run(inp):
                         data = requests.get(f"{COMFY}/view", params={"filename": f["filename"], "subfolder": f.get("subfolder", ""), "type": f.get("type", "output")}, timeout=300).content
                         result = {"video": base64.b64encode(data).decode(), "filename": f["filename"],
                                   "model_profile": MODEL, "attention": os.getenv("ENABLE_ATTENTION", "0"),
+                                  "mode": p["mode"],
                                   "steps": p["steps"], "warnings": (["negative_prompt and cfg are accepted for client compatibility but are not used by native H3"] if p["negative_prompt"] or p["cfg"] != 1.0 else [])}
                         if profiler:
                             profiler.end("comfyui_execution", "✅ ComfyUI 执行完成（包含采样及后处理，底层未提供分段 callback）")

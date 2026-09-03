@@ -12,6 +12,8 @@ The default model profile is **pruned FP8 scaled DiT + NVFP4-AWQ Qwen3-VL**. The
 - `.github/workflows/build.yml`: builds a slim image and appends large model files as remote layers with `crane`.
 - `scripts/submit_runpod.py`: submit a local image and workflow to a RunPod endpoint.
 - `scripts/benchmark.py`: runs one 20/8/6/4-step matrix; run it once per endpoint attention setting for a valid A/B comparison.
+- `Dockerfile.feature-easy`: independent feature image with `ComfyUI-MiniMaxH3-Easy` and Ref2VA provisioning; it does not alter the performance images.
+- `docs/UNIFIED_API.md`: one Mac-to-RunPod request contract for multimodal assets and Desktop API workflows.
 
 ## Important model behavior
 
@@ -67,6 +69,23 @@ Use the immutable image digest in production after the first successful benchmar
 ```
 
 The returned `output.video` is a base64 MP4 unless you configure the RunPod S3 output integration.
+
+## Feature Easy image
+
+For the simple multimodal workflow, build a separate image from
+`Dockerfile.feature-easy`. It installs the MIT-licensed
+[`ComfyUI-MiniMaxH3-Easy`](https://github.com/nkxx188/ComfyUI-MiniMaxH3-Easy) node pack and
+provisions the official pruned FP8 scaled Ref2VA checkpoint on the Network Volume. The
+existing three performance endpoints remain unchanged. Send a workflow saved from Mac
+with **Save (API Format)**; the worker passes custom Easy/Director graphs through and
+binds uploaded `image`, `video`, and `audio` assets to matching loader nodes.
+
+The Easy image is the recommended first feature endpoint. It supports the official H3
+reference limits (up to 9 images, 3 videos, 3 audio clips, 12 files total); use the
+workflow's own Ref2VA graph and `<Picture>`, `<Video>`, and `<Audio>` references. Do not
+use the FL2VA performance template for R2V/V2V. ControlNet and Motion Context remain
+optional extensions and should be added only after the Easy endpoint passes a smoke
+test, so they cannot break the stable performance images.
 
 ## MXFP8 candidate (isolated from baseline)
 
