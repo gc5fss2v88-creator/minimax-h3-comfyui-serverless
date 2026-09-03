@@ -20,6 +20,7 @@ COPY check_arch.py /tmp/check_arch.py
 RUN /opt/venv/bin/python /tmp/check_arch.py sm_120 && rm /tmp/check_arch.py
 
 COPY handler.py /handler.py
+COPY profiling.py /profiling.py
 COPY workflows/h3_i2v_mxfp8_api.json /workflows/h3_i2v_api.json
 COPY start-serverless.sh /start-serverless.sh
 RUN chmod +x /start-serverless.sh && \
