@@ -4,6 +4,13 @@ set -euo pipefail
 echo "[h3-worker] profile=${MODEL_PROFILE:-blackwell_fp8} attention=${ENABLE_ATTENTION:-0}"
 if [[ "${MODEL_PROFILE:-}" == "mxfp8_blackwell_candidate" ]]; then
   models="${COMFYUI_PATH:-/comfyui}/models"
+  volume_root="${MODEL_VOLUME_PATH:-/runpod-volume}"
+  if [[ -d "$volume_root" ]]; then
+    mkdir -p "$volume_root/models"
+    rm -rf "$models"
+    ln -s "$volume_root/models" "$models"
+    echo "[h3-worker] using persistent model volume at $volume_root"
+  fi
   H="${H3_MODEL_BASE_URL:-https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main}"
   G="${H3_MXFP8_BASE_URL:-https://huggingface.co/rzgar/minimax_h3_fl2va_fp8_e4m3fn/resolve/main}"
   download() {
