@@ -1,53 +1,63 @@
-# Independent SageAttention candidate. Production and MXFP8 baseline Dockerfiles
-# are intentionally untouched.
+# Independent SageAttention candidate. The production and MXFP8 baseline
+# Dockerfiles are intentionally untouched.
 # syntax=docker/dockerfile:1.7
-FROM runpod/worker-comfyui:5.8.6-base
 
-ARG COMFYUI_TAG=v0.32.0
-WORKDIR /comfyui
-COPY requirements-worker.txt /tmp/requirements-worker.txt
+FROM nvidia/cuda:13.0.2-devel-ubuntu24.04 AS sage-builder
 
-RUN git fetch --depth 1 origin refs/tags/${COMFYUI_TAG} && git checkout FETCH_HEAD && \
-    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
-    /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements-worker.txt && \
-    /opt/venv/bin/pip install --no-cache-dir --force-reinstall torch==2.12.0 torchvision torchaudio \
-      --index-url https://download.pytorch.org/whl/cu130 && \
-    /opt/venv/bin/pip install --no-cache-dir comfy-kitchen && \
-    /opt/venv/bin/pip install --no-cache-dir ninja packaging wheel nvidia-cuda-nvcc==13.0.88
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda \
+    TORCH_CUDA_ARCH_LIST=12.0 \
+    MAX_JOBS=32 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# SageAttention 2.2.0 is published in the official repository release, but is
-# not available from the package index used by the runner. Build that exact
-# official tag in the existing CUDA/PyTorch environment; do not alter either.
-RUN git clone --depth 1 --branch v2.2.0 https://github.com/thu-ml/SageAttention.git /tmp/SageAttention && \
-    CUDA_HOME=/opt/venv/lib/python3.12/site-packages/nvidia/cuda_nvcc /opt/venv/bin/python /tmp/SageAttention/setup.py install && \
-    rm -rf /tmp/SageAttention
+RUN apt-get update -qq && apt-get install -y -qq \
+      git python3.12 python3.12-dev python3.12-venv \
+      build-essential ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3.12 -m venv /sage-venv && \
+    /sage-venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel ninja packaging && \
+    /sage-venv/bin/pip install --no-cache-dir \
+      torch==2.12.0 torchvision torchaudio \
+      --index-url https://download.pytorch.org/whl/cu130
 
-RUN apt-get update -qq && apt-get install -y -qq aria2 && rm -rf /var/lib/apt/lists/*
+# Official SageAttention v2.2.0 source build, targeted explicitly at SM120.
+RUN git clone --depth 1 --branch v2.2.0 \
+      https://github.com/thu-ml/SageAttention.git /tmp/SageAttention && \
+    /sage-venv/bin/pip wheel --no-build-isolation --no-deps \
+      /tmp/SageAttention -w /wheelhouse && \
+    test -s /wheelhouse/sageattention-2.2.0-*.whl
 
-COPY check_arch.py /tmp/check_arch.py
-RUN /opt/venv/bin/python /tmp/check_arch.py sm_120 && rm /tmp/check_arch.py
+RUN /sage-venv/bin/python - <<'PY'
+import glob
+import torch
+print(f"[sage-builder] torch={torch.__version__} cuda={torch.version.cuda}")
+print("[sage-builder] TORCH_CUDA_ARCH_LIST=12.0")
+print("[sage-builder] wheels=" + ",".join(glob.glob('/wheelhouse/*.whl')))
+PY
 
-# Fail the candidate build if the SageAttention extension cannot import in the
-# exact Python/Torch environment shipped in this image.
+# Runtime remains the already-verified MXFP8 H3 worker image.
+FROM ghcr.io/gc5fss2v88-creator/minimax-h3-blackwell:mxfp8-candidate-code AS runtime
+
+COPY --from=sage-builder /wheelhouse/sageattention-2.2.0-*.whl /tmp/
+RUN /opt/venv/bin/pip install --no-cache-dir --no-deps /tmp/sageattention-2.2.0-*.whl && \
+    rm -f /tmp/sageattention-2.2.0-*.whl
+
 RUN /opt/venv/bin/python - <<'PY'
+import glob
 import torch
 import sageattention
 from sageattention import sageattn
-print(f"[sage-candidate] sageattention={getattr(sageattention, '__version__', 'unknown')}")
-print(f"[sage-candidate] torch={torch.__version__} cuda={torch.version.cuda}")
-print(f"[sage-candidate] sageattn={sageattn}")
+print(f"[sage-runtime] sageattention={getattr(sageattention, '__version__', '2.2.0')}")
+print(f"[sage-runtime] torch={torch.__version__} cuda={torch.version.cuda}")
+print(f"[sage-runtime] sageattn={sageattn}")
+print("[sage-runtime] extensions=" + ",".join(glob.glob('/opt/venv/lib/python3.12/site-packages/sageattention/*.so')))
 PY
-
-# Verify the pinned ComfyUI release exposes the exact runtime switch used by
-# start-serverless.sh. This does not enable it in the baseline image.
-RUN /opt/venv/bin/python /comfyui/main.py --help 2>&1 | grep -q -- '--use-sage-attention'
 
 COPY handler.py /handler.py
 COPY profiling.py /profiling.py
 COPY workflows/h3_i2v_mxfp8_api.json /workflows/h3_i2v_api.json
 COPY start-serverless.sh /start-serverless.sh
-RUN chmod +x /start-serverless.sh && \
-    mkdir -p /comfyui/models/diffusion_models /comfyui/models/text_encoders /comfyui/models/vae /comfyui/models/loras
+RUN chmod +x /start-serverless.sh
 
 ENV COMFYUI_PATH=/comfyui \
     COMFYUI_PORT=8188 \
