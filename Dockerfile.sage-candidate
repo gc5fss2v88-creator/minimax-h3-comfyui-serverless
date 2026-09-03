@@ -13,8 +13,14 @@ RUN git fetch --depth 1 origin refs/tags/${COMFYUI_TAG} && git checkout FETCH_HE
     /opt/venv/bin/pip install --no-cache-dir --force-reinstall torch==2.12.0 torchvision torchaudio \
       --index-url https://download.pytorch.org/whl/cu130 && \
     /opt/venv/bin/pip install --no-cache-dir comfy-kitchen && \
-    /opt/venv/bin/pip install --no-cache-dir ninja packaging wheel && \
-    /opt/venv/bin/pip install --no-cache-dir --no-build-isolation sageattention==2.2.0
+    /opt/venv/bin/pip install --no-cache-dir ninja packaging wheel
+
+# SageAttention 2.2.0 is published in the official repository release, but is
+# not available from the package index used by the runner. Build that exact
+# official tag in the existing CUDA/PyTorch environment; do not alter either.
+RUN git clone --depth 1 --branch v2.2.0 https://github.com/thu-ml/SageAttention.git /tmp/SageAttention && \
+    CUDA_HOME=/usr/local/cuda /opt/venv/bin/python /tmp/SageAttention/setup.py install && \
+    rm -rf /tmp/SageAttention
 
 RUN apt-get update -qq && apt-get install -y -qq aria2 && rm -rf /var/lib/apt/lists/*
 
