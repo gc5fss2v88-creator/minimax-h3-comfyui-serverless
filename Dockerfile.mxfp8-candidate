@@ -3,7 +3,7 @@
 # syntax=docker/dockerfile:1.7
 FROM runpod/worker-comfyui:5.8.6-base
 
-ARG COMFYUI_TAG=v0.30.1
+ARG COMFYUI_TAG=v0.32.0
 WORKDIR /comfyui
 COPY requirements-worker.txt /tmp/requirements-worker.txt
 
