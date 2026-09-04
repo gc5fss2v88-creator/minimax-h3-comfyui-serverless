@@ -47,7 +47,6 @@ jobs:
           append text_encoders qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors "$H/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
           append vae minimax_h3_video_vae_fp16.safetensors "$H/vae/minimax_h3_video_vae_fp16.safetensors"
           append vae minimax_h3_audio_vae_fp32.safetensors "$H/vae/minimax_h3_audio_vae_fp32.safetensors"
-          append loras minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors "$H/loras/minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors"
-          append loras minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors "$H/loras/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
+          append loras minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"
+          append loras minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/main/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors"
           crane tag "$base" latest
-
