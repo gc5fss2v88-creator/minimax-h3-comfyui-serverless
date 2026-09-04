@@ -11,6 +11,9 @@ mkdir -p "$volume_root/models" "$volume_root/profiling"
 rm -rf "$models"
 ln -s "$volume_root/models" "$models"
 echo "[h3-feature] using persistent model volume at $volume_root"
+if [[ -d /comfyui/custom_nodes/ComfyUI_MiniMaxH3_Director ]]; then
+  echo "[h3-feature] H3 Director node pack installed"
+fi
 
 H="${H3_MODEL_BASE_URL:-https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main}"
 G="${H3_MXFP8_BASE_URL:-https://huggingface.co/rzgar/minimax_h3_fl2va_fp8_e4m3fn/resolve/main}"
@@ -59,7 +62,7 @@ subprocess.Popen(args)
 for _ in range(180):
     try:
         urllib.request.urlopen(f"http://127.0.0.1:{port}/system_stats", timeout=2)
-        print("[h3-feature] ComfyUI ready; Easy node pack requested", flush=True)
+        print("[h3-feature] ComfyUI ready; Easy + H3 Director node packs requested", flush=True)
         break
     except Exception:
         time.sleep(1)
