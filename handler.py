@@ -1,5 +1,6 @@
 """RunPod handler that adapts the ComfyUI HTTP API to Serverless jobs."""
 import base64, copy, json, os, pathlib, time, uuid
+import shutil
 from typing import Any
 
 
@@ -8,6 +9,12 @@ TEMPLATE = pathlib.Path(os.getenv('WORKFLOW_TEMPLATE', str(pathlib.Path(__file__
 DEFAULTS = {"mode": "i2v", "width": 1344, "height": 768, "duration": 15, "fps": 24, "steps": 8,
             "seed": 42, "sampler": "res_multistep", "scheduler": "simple",
             "cfg": 1.0, "lora_strength": 1.0, "prompt": "", "negative_prompt": ""}
+MODE_ALIASES = {
+    "image_to_video": "i2v",
+    "video_to_video": "v2v",
+    "image_video_mix": "rv2v",
+    "audio_reference": "r2v",
+}
 MODEL = os.getenv("MODEL_PROFILE", "blackwell_fp8")
 LORAS = {4: os.getenv("LORA_4STEP", "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfyui_bf16.safetensors"),
          8: os.getenv("LORA_8STEP", "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors")}
@@ -18,6 +25,7 @@ def _json(data):
 def _params(inp):
     p = {**DEFAULTS, **(inp.get("params") or {})}
     p["mode"] = str(p["mode"]).lower()
+    p["mode"] = MODE_ALIASES.get(p["mode"], p["mode"])
     if p["mode"] not in ("t2v", "i2v", "fl2v", "r2v", "v2v", "rv2v"):
         raise ValueError("mode must be one of t2v, i2v, fl2v, r2v, v2v, rv2v")
     if p["steps"] not in (4, 6, 8, 20):
@@ -40,6 +48,12 @@ def _frames(seconds):
 def _workflow(inp, p):
     if p["mode"] != "i2v" and not inp.get("workflow"):
         raise ValueError(f"mode={p['mode']} requires a matching ComfyUI Desktop API workflow")
+    supplied = inp.get("workflow")
+    if isinstance(supplied, dict) and isinstance(supplied.get("nodes"), list):
+        raise ValueError(
+            "workflow is a ComfyUI canvas export; open it in ComfyUI Desktop and "
+            "choose Save (API Format) before sending it to RunPod"
+        )
     wf = copy.deepcopy(inp.get("workflow") or json.loads(TEMPLATE.read_text()))
     # Keep node ids stable in the shipped API template; exported Desktop workflows can
     # also be used when they retain these semantic node types and fields.
@@ -212,8 +226,95 @@ def _run(inp):
         time.sleep(2)
     raise TimeoutError(f"ComfyUI job timed out after {os.getenv('JOB_TIMEOUT_SECONDS', '1800')}s")
 
+
+def _wait_comfy(timeout=300):
+    import requests
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if requests.get(f"{COMFY}/object_info", timeout=5).ok:
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
+def _run_runonrunpod(job):
+    """Compatibility path for the installed ComfyUI-RunOnRunpod plugin.
+
+    The normal H3 API contract above remains unchanged.  This path accepts the
+    plugin's input_files/workflow contract and persists outputs where its S3
+    client expects them.
+    """
+    import requests
+    inp = dict(job.get("input") or {})
+    action = inp.get("action")
+    if action == "version":
+        ready = _wait_comfy()
+        try:
+            import torch
+            torch_version, cuda = torch.__version__, torch.version.cuda or ""
+        except Exception:
+            torch_version, cuda = "", ""
+        return {"status": "ok" if ready else "comfy_not_ready", "worker_version": "h3",
+                "protocol_version": 1, "cuda_version": cuda, "pytorch_version": torch_version,
+                "comfyui_version": os.getenv("COMFYUI_VERSION", "0.32.0")}
+    if action == "node_list":
+        return {"node_list": list(requests.get(f"{COMFY}/object_info", timeout=120).json())}
+    if action == "fetch_models":
+        # The Feature Easy startup already provisions its known H3 files.  Any
+        # unknown file is deliberately reported for the plugin's local-upload
+        # fallback, avoiding a second downloader in the production handler.
+        return {"action": "fetch_models", "total": len(inp.get("downloads") or []),
+                "results": [{"filename": os.path.basename(x.get("dest_path", "")),
+                             "status": "failed", "error": "use plugin local-upload fallback"}
+                            for x in (inp.get("downloads") or [])]}
+
+    workflow = inp.get("workflow")
+    if not isinstance(workflow, dict):
+        raise ValueError("RunOnRunpod workflow is missing")
+    for filename, s3_key in (inp.get("input_files") or {}).items():
+        src = os.path.join(os.getenv("MODEL_VOLUME_PATH", "/runpod-volume"), s3_key)
+        dest = os.path.join("/comfyui/input", pathlib.Path(filename).name)
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"input file missing on Network Volume: {s3_key}")
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(src, dest)
+    q = requests.post(f"{COMFY}/prompt", json={"prompt": workflow}, timeout=120)
+    q.raise_for_status()
+    prompt_id = q.json()["prompt_id"]
+    deadline = time.time() + int(os.getenv("JOB_TIMEOUT_SECONDS", "1800"))
+    while time.time() < deadline:
+        history = requests.get(f"{COMFY}/history/{prompt_id}", timeout=30).json()
+        if prompt_id in history:
+            item = history[prompt_id]
+            if item.get("status", {}).get("status_str") == "error":
+                return {"error": _json(item.get("status"))}
+            if item.get("status", {}).get("completed") or item.get("status", {}).get("status_str") == "success":
+                root = os.getenv("MODEL_VOLUME_PATH", "/runpod-volume")
+                job_dir = time.strftime("%Y%m%d%H%M%S") + "_" + str(job.get("id", "unknown"))
+                output_files = []
+                for out in item.get("outputs", {}).values():
+                    for key in ("gifs", "videos", "images", "audio"):
+                        for f in out.get(key, []):
+                            src = os.path.join("/comfyui/output", f.get("subfolder", ""), f["filename"])
+                            if os.path.isfile(src):
+                                rel = os.path.join(job_dir, pathlib.Path(f["filename"]).name)
+                                dest = os.path.join(root, "outputs", rel)
+                                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                                shutil.copy2(src, dest)
+                                output_files.append(rel)
+                return {"status": "success", "output_count": len(output_files), "output_files": output_files}
+        time.sleep(1)
+    raise TimeoutError("RunOnRunpod workflow timed out")
+
 def handler(job):
     try:
+        if (job.get("input") or {}).get("action") in ("version", "node_list", "fetch_models"):
+            return _run_runonrunpod(job)
+        if (job.get("input") or {}).get("input_files") and (job.get("input") or {}).get("workflow"):
+            return _run_runonrunpod(job)
         payload = dict(job.get("input") or {})
         payload.setdefault("job_id", job.get("id", "unknown"))
         return _run(payload)
