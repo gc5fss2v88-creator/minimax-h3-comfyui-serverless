@@ -14,8 +14,11 @@ RUN git fetch --depth 1 origin refs/tags/${COMFYUI_TAG} && git checkout FETCH_HE
 COPY check_arch.py /tmp/check_arch.py
 RUN /opt/venv/bin/python /tmp/check_arch.py sm_120 && rm /tmp/check_arch.py
 
+RUN apt-get update -qq && apt-get install -y -qq aria2 && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p /comfyui/models/diffusion_models /comfyui/models/text_encoders /comfyui/models/vae /comfyui/models/loras
 COPY handler.py /handler.py
+COPY profiling.py /profiling.py
 COPY workflows /workflows
 COPY start-serverless.sh /start-serverless.sh
 RUN chmod +x /start-serverless.sh

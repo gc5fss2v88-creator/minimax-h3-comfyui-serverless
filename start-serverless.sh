@@ -2,7 +2,7 @@
 set -euo pipefail
 
 echo "[h3-worker] profile=${MODEL_PROFILE:-blackwell_fp8} attention=${ENABLE_ATTENTION:-0}"
-if [[ "${MODEL_PROFILE:-}" == "mxfp8_blackwell_candidate" ]]; then
+if [[ "${MODEL_PROFILE:-blackwell_fp8}" == "mxfp8_blackwell_candidate" || "${MODEL_PROFILE:-blackwell_fp8}" == "blackwell_fp8" ]]; then
   models="${COMFYUI_PATH:-/comfyui}/models"
   volume_root="${MODEL_VOLUME_PATH:-/runpod-volume}"
   if [[ -d "$volume_root" ]]; then
@@ -20,7 +20,11 @@ if [[ "${MODEL_PROFILE:-}" == "mxfp8_blackwell_candidate" ]]; then
       aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$models/$dir" -o "$file" "$url"
     fi
   }
-  download diffusion_models minimax_h3_fl2va_mxfp8.safetensors "$G/minimax_h3_fl2va_mxfp8.safetensors"
+  if [[ "${MODEL_PROFILE:-blackwell_fp8}" == "mxfp8_blackwell_candidate" ]]; then
+    download diffusion_models minimax_h3_fl2va_mxfp8.safetensors "$G/minimax_h3_fl2va_mxfp8.safetensors"
+  else
+    download diffusion_models minimax_h3_fl2va_pruned_fp8_scaled.safetensors "$H/diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors"
+  fi
   download text_encoders qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors "$H/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
   download vae minimax_h3_video_vae_fp16.safetensors "$H/vae/minimax_h3_video_vae_fp16.safetensors"
   download vae minimax_h3_audio_vae_fp32.safetensors "$H/vae/minimax_h3_audio_vae_fp32.safetensors"
@@ -29,7 +33,7 @@ if [[ "${MODEL_PROFILE:-}" == "mxfp8_blackwell_candidate" ]]; then
   python3 - <<'PY'
 import torch
 import comfy_kitchen
-print(f"[h3-worker] MXFP8 runtime available; torch={torch.__version__} cuda={torch.version.cuda}", flush=True)
+print(f"[h3-worker] H3 model volume ready; torch={torch.__version__} cuda={torch.version.cuda}", flush=True)
 PY
 fi
 python3 - <<'PY'
