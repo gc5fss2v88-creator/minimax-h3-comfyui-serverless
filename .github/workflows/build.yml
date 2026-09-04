@@ -38,10 +38,19 @@ jobs:
           layer=0
           append() {
             dir="$1"; file="$2"; url="$3"; layer=$((layer + 1)); rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$dir"
-            aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$root/stage/comfyui/models/$dir" -o "$file" "$url"
+            echo "[h3-build] downloading $dir/$file"
+            aria2c -x16 -s16 -k1M --max-tries=8 --retry-wait=10 --timeout=60 --connect-timeout=30 --console-log-level=warn --dir="$root/stage/comfyui/models/$dir" -o "$file" "$url"
             tar --owner=0 --group=0 -cf "$root/layer.tar" -C "$root/stage" comfyui
             target="$IMAGE:layer-${GITHUB_RUN_ID}-${layer}"
-            crane append -b "$base" -f "$root/layer.tar" -t "$target"
+            echo "[h3-build] appending layer $layer to $target"
+            for attempt in 1 2 3; do
+              if crane append -b "$base" -f "$root/layer.tar" -t "$target"; then
+                break
+              fi
+              if [[ "$attempt" == 3 ]]; then exit 1; fi
+              echo "[h3-build] crane append failed; retrying attempt $((attempt + 1))"
+              sleep $((attempt * 20))
+            done
             base="$target"; rm -rf "$root/stage" "$root/layer.tar"
           }
           H=https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main
