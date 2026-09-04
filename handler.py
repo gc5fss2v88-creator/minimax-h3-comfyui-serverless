@@ -327,13 +327,31 @@ def _run_runonrunpod(job):
     if action == "node_list":
         return {"node_list": list(requests.get(f"{COMFY}/object_info", timeout=120).json())}
     if action == "fetch_models":
-        # The Feature Easy startup already provisions its known H3 files.  Any
-        # unknown file is deliberately reported for the plugin's local-upload
-        # fallback, avoiding a second downloader in the production handler.
-        return {"action": "fetch_models", "total": len(inp.get("downloads") or []),
-                "results": [{"filename": os.path.basename(x.get("dest_path", "")),
-                             "status": "failed", "error": "use plugin local-upload fallback"}
-                            for x in (inp.get("downloads") or [])]}
+        # RunOnRunpod asks this before queueing.  Never make the Desktop plugin
+        # upload a model that is already on the persistent Network Volume.
+        volume = pathlib.Path(os.getenv("MODEL_VOLUME_PATH", "/runpod-volume"))
+        model_root = volume / "models"
+        results = []
+        for item in (inp.get("downloads") or []):
+            if not isinstance(item, dict):
+                continue
+            raw = str(item.get("dest_path", ""))
+            filename = pathlib.Path(raw).name
+            relative = raw.lstrip("/")
+            for prefix in ("comfyui/", "ComfyUI/"):
+                if relative.startswith(prefix):
+                    relative = relative[len(prefix):]
+            if relative.startswith("models/"):
+                candidate = volume / relative
+            else:
+                candidate = model_root / relative
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                results.append({"filename": filename, "status": "success",
+                                "path": str(candidate), "source": "network_volume"})
+            else:
+                results.append({"filename": filename, "status": "missing",
+                                "error": "model not found on Network Volume"})
+        return {"action": "fetch_models", "total": len(results), "results": results}
 
     workflow = inp.get("workflow")
     if not isinstance(workflow, dict):
