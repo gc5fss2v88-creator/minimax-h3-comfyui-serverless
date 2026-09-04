@@ -67,3 +67,17 @@ H3 没有稳定的官方“绘制一条 spline 后人物严格沿线走”接口
 `input.assets`。这样普通 I2V 和功能完整的 Director workflow 共用同一 HTTP
 入口，缺少节点时会返回明确错误，而不是生成错误视频。
 
+旧版 `work/video_minimax_h3_i2v.json` 是 ComfyUI 画布工作流，继续保留用于
+Mac 编辑；提交前必须从 Desktop 重新导出 API Format。它对应 `i2v`，不会被
+Worker 强行改写成 R2V/V2V。新的多媒体模式必须使用包含对应 `LoadVideo`、
+`LoadAudio` 或 H3 Ref2VA/Director 节点的 API Workflow。
+
+模式名称也支持面向用户的别名：`image_to_video`、`video_to_video`、
+`image_video_mix`、`audio_reference`，Worker 会分别映射为 `i2v`、`v2v`、
+`rv2v`、`r2v`。这只改变接口名称，不改变模型或采样参数。
+
+Feature Easy 镜像单独集成了
+[`AIMixer/ComfyUI_MiniMaxH3_Director`](https://github.com/AIMixer/ComfyUI_MiniMaxH3_Director)。
+推荐用它制作统一画布：`i2v/fl2v` 使用 FL2VA，`r2v/v2v/rv2v` 使用 Ref2VA。
+视频参考由 Director 解码并整理为 H3 所需的 24fps 帧序列；不要把
+`ImageToVideo` 和 `ReferenceToVideo` 接入同一条条件链。
