@@ -22,6 +22,68 @@ LORAS = {4: os.getenv("LORA_4STEP", "minimax_h3_fl2v_turbo_4step_v1.1_768p_comfy
 def _json(data):
     return json.dumps(data, ensure_ascii=False)
 
+def _is_runonrunpod_probe(inp):
+    return (inp or {}).get("action") in ("version", "node_list", "fetch_models")
+
+def _has_h3_prompt(inp):
+    return bool(((inp or {}).get("params") or {}).get("prompt"))
+
+def _validate_workflow_before_prompt(wf):
+    """Reject invalid model/loader selections before ComfyUI queues a job.
+
+    The allowed filenames are read from this worker's live ComfyUI schema.  This
+    keeps INT8, FP8-scaled, MXFP8, Feature and Sage candidates independent.
+    """
+    if not isinstance(wf, dict):
+        raise ValueError("workflow must be ComfyUI API Format JSON")
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"{COMFY}/object_info", timeout=30) as response:
+            object_info = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise ValueError(f"cannot validate workflow models before submission: {exc}") from exc
+
+    fields = {
+        "UNETLoader": "unet_name",
+        "CLIPLoader": "clip_name",
+        "VAELoader": "vae_name",
+        "LoraLoader": "lora_name",
+        "LoraLoaderModelOnly": "lora_name",
+    }
+    for node_id, node in wf.items():
+        if not isinstance(node, dict) or not node.get("class_type"):
+            continue
+        kind = node["class_type"]
+        field = fields.get(kind)
+        if not field:
+            continue
+        value = (node.get("inputs") or {}).get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{kind} {node_id} is missing required {field}")
+        schema = object_info.get(kind, {}).get("input", {}).get("required", {}).get(field)
+        choices = schema[0] if isinstance(schema, list) and schema and isinstance(schema[0], list) else None
+        if choices is not None and value not in choices:
+            raise ValueError(
+                f"{kind} {node_id} selects unavailable {field}={value!r}; "
+                f"available models: {choices}"
+            )
+
+    # A direct Desktop/RunOnRunpod workflow must bind every media loader it
+    # contains.  Otherwise ComfyUI would only reject it after waking the GPU.
+    media_fields = {
+        "LoadImage": "image",
+        "LoadVideo": "video",
+        "VHS_LoadVideo": "video",
+        "LoadAudio": "audio",
+        "VHS_LoadAudio": "audio",
+    }
+    for node_id, node in wf.items():
+        if not isinstance(node, dict):
+            continue
+        field = media_fields.get(node.get("class_type"))
+        if field and not (node.get("inputs") or {}).get(field):
+            raise ValueError(f"{node.get('class_type')} {node_id} is missing required input {field}")
+
 def _params(inp):
     p = {**DEFAULTS, **(inp.get("params") or {})}
     p["mode"] = str(p["mode"]).lower()
@@ -109,7 +171,7 @@ def _workflow(inp, p):
         wf["guider"]["inputs"]["model"] = ["lora", 0]
     elif "guider" in wf and "unet" in wf:
         wf["guider"]["inputs"]["model"] = ["unet", 0]
-    _bind_assets(wf, inp)
+    _bind_assets(wf, inp, p["mode"])
     return wf
 
 def _asset_groups(inp):
@@ -126,7 +188,7 @@ def _asset_groups(inp):
             groups[kind].append(asset)
     return groups
 
-def _bind_assets(wf, inp):
+def _bind_assets(wf, inp, normalized_mode=None):
     groups = _asset_groups(inp)
     uploaded = {kind: [_upload(x) for x in items] for kind, items in groups.items()}
     typed = {}
@@ -156,7 +218,8 @@ def _bind_assets(wf, inp):
                 f"{len(nodes)} matching loader nodes; add loaders in ComfyUI Desktop"
             )
 
-    mode = str((inp.get("params") or {}).get("mode", DEFAULTS["mode"])).lower()
+    mode = normalized_mode or str((inp.get("params") or {}).get("mode", DEFAULTS["mode"])).lower()
+    mode = MODE_ALIASES.get(mode, mode)
     required = {"i2v": (1, 0, 0), "fl2v": (1, 0, 0), "r2v": (0, 0, 0),
                 "v2v": (0, 1, 0), "rv2v": (0, 1, 0), "t2v": (0, 0, 0)}[mode]
     if len(uploaded["image"]) < required[0] and mode in ("i2v", "fl2v"):
@@ -195,6 +258,7 @@ def _run(inp):
     if profiler:
         profiler.begin("workflow_prepare", "🧩 准备 H3 workflow")
     wf = _workflow(inp, p)
+    _validate_workflow_before_prompt(wf)
     if profiler:
         profiler.end("workflow_prepare", "🧩 H3 workflow 准备完成")
     client = str(uuid.uuid4())
@@ -281,6 +345,7 @@ def _run_runonrunpod(job):
             raise FileNotFoundError(f"input file missing on Network Volume: {s3_key}")
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.copy2(src, dest)
+    _validate_workflow_before_prompt(workflow)
     q = requests.post(f"{COMFY}/prompt", json={"prompt": workflow}, timeout=120)
     q.raise_for_status()
     prompt_id = q.json()["prompt_id"]
@@ -311,11 +376,17 @@ def _run_runonrunpod(job):
 
 def handler(job):
     try:
-        if (job.get("input") or {}).get("action") in ("version", "node_list", "fetch_models"):
+        inp = dict(job.get("input") or {})
+        if _is_runonrunpod_probe(inp):
             return _run_runonrunpod(job)
-        if (job.get("input") or {}).get("input_files") and (job.get("input") or {}).get("workflow"):
+        if inp.get("input_files") and inp.get("workflow"):
             return _run_runonrunpod(job)
-        payload = dict(job.get("input") or {})
+        if not _has_h3_prompt(inp):
+            return {
+                "error": "incomplete request: add params.prompt for H3 jobs, or use action=version/node_list/fetch_models for RunOnRunpod probes",
+                "type": "ValueError",
+            }
+        payload = inp
         payload.setdefault("job_id", job.get("id", "unknown"))
         return _run(payload)
     except Exception as exc:
