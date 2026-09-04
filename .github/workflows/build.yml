@@ -35,12 +35,14 @@ jobs:
           crane auth login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
           root=/mnt/h3-weights; mkdir -p "$root"
           base="$IMAGE:cu130-code"
+          layer=0
           append() {
-            dir="$1"; file="$2"; url="$3"; rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$dir"
+            dir="$1"; file="$2"; url="$3"; layer=$((layer + 1)); rm -rf "$root/stage"; mkdir -p "$root/stage/comfyui/models/$dir"
             aria2c -x16 -s16 -k1M --console-log-level=warn --dir="$root/stage/comfyui/models/$dir" -o "$file" "$url"
             tar --owner=0 --group=0 -cf "$root/layer.tar" -C "$root/stage" comfyui
-            crane append -b "$base" -f "$root/layer.tar" -t "$IMAGE:wip"
-            base="$IMAGE:wip"; rm -rf "$root/stage" "$root/layer.tar"
+            target="$IMAGE:layer-${GITHUB_RUN_ID}-${layer}"
+            crane append -b "$base" -f "$root/layer.tar" -t "$target"
+            base="$target"; rm -rf "$root/stage" "$root/layer.tar"
           }
           H=https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main
           append diffusion_models minimax_h3_fl2va_pruned_fp8_scaled.safetensors "$H/diffusion_models/minimax_h3_fl2va_pruned_fp8_scaled.safetensors"
