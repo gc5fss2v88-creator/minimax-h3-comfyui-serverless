@@ -25,6 +25,94 @@ def _json(data):
 def _is_runonrunpod_probe(inp):
     return (inp or {}).get("action") in ("version", "node_list", "fetch_models")
 
+
+LEGACY_MODEL_ALIASES = {
+    "minimax_h3_fl2va_pruned_int8_convrot.safetensors": "minimax_h3_fl2va_mxfp8.safetensors",
+    "minimax_h3_fl2va_pruned_fp8_scaled.safetensors": "minimax_h3_fl2va_mxfp8.safetensors",
+    "minimax_h3_ref2va_pruned_int8_convrot.safetensors": "minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
+}
+CLIP_MODEL = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+VIDEO_VAE = "minimax_h3_video_vae_fp16.safetensors"
+AUDIO_VAE = "minimax_h3_audio_vae_fp32.safetensors"
+REF_LORA = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
+
+
+def _decode_workflow(value):
+    """Accept one JSON-encoded API workflow from RunOnRunpod clients."""
+    for _ in range(2):
+        if not isinstance(value, str):
+            break
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError("workflow must be ComfyUI API Format JSON, not a malformed JSON string") from exc
+    if not isinstance(value, dict):
+        raise ValueError("workflow must be ComfyUI API Format JSON")
+    return value
+
+
+def _workflow_is_reference(wf, mode=None):
+    mode = MODE_ALIASES.get(str(mode or "").lower(), str(mode or "").lower())
+    if mode in ("r2v", "v2v", "rv2v"):
+        return True
+    for node in wf.values():
+        if not isinstance(node, dict):
+            continue
+        kind = str(node.get("class_type", "")).lower()
+        inputs = node.get("inputs") or {}
+        if "reference" in kind or any(str(key).startswith("ref_") for key in inputs):
+            return True
+        values = inputs.values()
+        if any(isinstance(value, str) and "ref2va" in value.lower() for value in values):
+            return True
+    return False
+
+
+def _normalize_workflow_models(wf, mode=None, steps=8):
+    """Make legacy Desktop/subgraph model widgets match this worker profile."""
+    reference = _workflow_is_reference(wf, mode)
+    preferred_unet = "minimax_h3_ref2va_pruned_fp8_scaled.safetensors" if reference else "minimax_h3_fl2va_mxfp8.safetensors"
+    preferred_lora = REF_LORA if reference else LORAS[4 if int(steps) == 4 else 8]
+    for node in wf.values():
+        if not isinstance(node, dict) or not node.get("class_type"):
+            continue
+        kind = node["class_type"]
+        inputs = node.setdefault("inputs", {})
+        if "unet_name" in inputs:
+            value = inputs.get("unet_name")
+            if not isinstance(value, str) or not value.strip() or value == "undefined" or value in LEGACY_MODEL_ALIASES or (reference and "ref2va" not in value) or (not reference and "ref2va" in value):
+                inputs["unet_name"] = LEGACY_MODEL_ALIASES.get(value, preferred_unet)
+        if "clip_name" in inputs and (not isinstance(inputs.get("clip_name"), str) or not inputs["clip_name"].strip() or inputs["clip_name"] == "undefined"):
+            inputs["clip_name"] = CLIP_MODEL
+        if "vae_name" in inputs and (not isinstance(inputs.get("vae_name"), str) or not inputs["vae_name"].strip() or inputs["vae_name"] == "undefined"):
+            inputs["vae_name"] = VIDEO_VAE
+
+        if "audio_vae" in inputs and (not isinstance(inputs.get("audio_vae"), str) or not inputs["audio_vae"].strip() or inputs["audio_vae"] == "undefined"):
+            inputs["audio_vae"] = AUDIO_VAE
+        if "lora_name" in inputs:
+            value = inputs.get("lora_name")
+            if not isinstance(value, str) or not value.strip() or value == "undefined" or (reference and "fl2v" in value) or (not reference and value.endswith("_comfyui_bf16.safetensors")):
+                inputs["lora_name"] = preferred_lora
+
+        if kind == "UNETLoader":
+            value = inputs.get("unet_name")
+            if not isinstance(value, str) or not value.strip() or value == "undefined" or value in LEGACY_MODEL_ALIASES:
+                inputs["unet_name"] = LEGACY_MODEL_ALIASES.get(value, preferred_unet)
+            elif (reference and "ref2va" not in value) or (not reference and "ref2va" in value):
+                inputs["unet_name"] = preferred_unet
+        elif kind == "CLIPLoader":
+            if not isinstance(inputs.get("clip_name"), str) or not inputs["clip_name"].strip() or inputs["clip_name"] == "undefined":
+                inputs["clip_name"] = CLIP_MODEL
+        elif kind == "VAELoader":
+            value = inputs.get("vae_name")
+            if not isinstance(value, str) or not value.strip() or value == "undefined":
+                inputs["vae_name"] = VIDEO_VAE
+        elif kind in ("LoraLoader", "LoraLoaderModelOnly"):
+            value = inputs.get("lora_name")
+            if not isinstance(value, str) or not value.strip() or value == "undefined" or (reference and "fl2v" in value) or (not reference and value.endswith("_comfyui_bf16.safetensors")):
+                inputs["lora_name"] = preferred_lora
+    return wf
+
 def _has_h3_prompt(inp):
     return bool(((inp or {}).get("params") or {}).get("prompt"))
 
@@ -111,12 +199,16 @@ def _workflow(inp, p):
     if p["mode"] != "i2v" and not inp.get("workflow"):
         raise ValueError(f"mode={p['mode']} requires a matching ComfyUI Desktop API workflow")
     supplied = inp.get("workflow")
+    if supplied is not None:
+        supplied = _decode_workflow(supplied)
+        inp["workflow"] = supplied
     if isinstance(supplied, dict) and isinstance(supplied.get("nodes"), list):
         raise ValueError(
             "workflow is a ComfyUI canvas export; open it in ComfyUI Desktop and "
             "choose Save (API Format) before sending it to RunPod"
         )
-    wf = copy.deepcopy(inp.get("workflow") or json.loads(TEMPLATE.read_text()))
+    wf = copy.deepcopy(supplied or json.loads(TEMPLATE.read_text()))
+    _normalize_workflow_models(wf, p["mode"], p["steps"])
     # Keep node ids stable in the shipped API template; exported Desktop workflows can
     # also be used when they retain these semantic node types and fields.
     typed = {}
@@ -378,8 +470,11 @@ def _run_runonrunpod(job):
         return {"action": "fetch_models", "total": len(results), "results": results}
 
     workflow = inp.get("workflow")
-    if not isinstance(workflow, dict):
+    if workflow is None:
         raise ValueError("RunOnRunpod workflow is missing")
+    workflow = _decode_workflow(workflow)
+    params = inp.get("params") or {}
+    _normalize_workflow_models(workflow, params.get("mode"), params.get("steps", 8))
     for filename, s3_key in (inp.get("input_files") or {}).items():
         src = os.path.join(os.getenv("MODEL_VOLUME_PATH", "/runpod-volume"), s3_key)
         dest = os.path.join("/comfyui/input", pathlib.Path(filename).name)
