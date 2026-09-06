@@ -56,15 +56,15 @@ PY
 COPY handler.py /handler.py
 COPY profiling.py /profiling.py
 COPY workflows/h3_i2v_mxfp8_api.json /workflows/h3_i2v_api.json
-COPY start-serverless.sh /start-serverless.sh
-RUN chmod +x /start-serverless.sh
+COPY start-sage-candidate.sh /start-sage-candidate.sh
+RUN chmod +x /start-sage-candidate.sh
 
 ENV COMFYUI_PATH=/comfyui \
     COMFYUI_PORT=8188 \
     MODEL_PROFILE=mxfp8_blackwell_candidate \
     MODEL_VOLUME_PATH=/runpod-volume \
-    ENABLE_ATTENTION=0 \
+    ENABLE_ATTENTION=1 \
     ATTENTION_ARGS=--use-sage-attention \
     PYTHONUNBUFFERED=1
 
-ENTRYPOINT ["/start-serverless.sh"]
+ENTRYPOINT ["/start-sage-candidate.sh"]

@@ -5,7 +5,7 @@ on:
   push:
     paths:
       - Dockerfile.sage-candidate
-      - start-serverless.sh
+      - start-sage-candidate.sh
       - handler.py
       - profiling.py
       - workflows/h3_i2v_mxfp8_api.json
