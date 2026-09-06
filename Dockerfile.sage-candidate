@@ -38,6 +38,63 @@ PY
 # Runtime remains the already-verified MXFP8 H3 worker image.
 FROM ghcr.io/gc5fss2v88-creator/minimax-h3-blackwell:mxfp8-candidate-code AS runtime
 
+# RunPod can close the worker log pipe while ComfyUI is initializing tqdm. Do
+# not turn that logging disconnect into a failed sampler execution.
+RUN /opt/venv/bin/python - <<'PY'
+from pathlib import Path
+
+path = Path('/comfyui/app/logger.py')
+text = path.read_text()
+old = '''    def write(self, data):
+        entry = {"t": datetime.now().isoformat(), "m": data}
+        with self._lock:
+            self._logs_since_flush.append(entry)
+
+            # Simple handling for cr to overwrite the last output if it isnt a full line
+            # else logs just get full of progress messages
+            if isinstance(data, str) and data.startswith("\\r") and not logs[-1]["m"].endswith("\\n"):
+                logs.pop()
+            logs.append(entry)
+        super().write(data)
+
+    def flush(self):
+        super().flush()
+        for cb in self._flush_callbacks:
+            cb(self._logs_since_flush)
+            self._logs_since_flush = []
+'''
+new = '''    def write(self, data):
+        entry = {"t": datetime.now().isoformat(), "m": data}
+        with self._lock:
+            self._logs_since_flush.append(entry)
+
+            # Simple handling for cr to overwrite the last output if it isnt a full line
+            # else logs just get full of progress messages
+            if isinstance(data, str) and data.startswith("\\r") and not logs[-1]["m"].endswith("\\n"):
+                logs.pop()
+            logs.append(entry)
+        try:
+            return super().write(data)
+        except BrokenPipeError:
+            return len(data) if isinstance(data, str) else 0
+
+    def flush(self):
+        try:
+            super().flush()
+        except BrokenPipeError:
+            return
+        for cb in self._flush_callbacks:
+            try:
+                cb(self._logs_since_flush)
+            except BrokenPipeError:
+                pass
+            self._logs_since_flush = []
+'''
+if old not in text:
+    raise SystemExit('expected ComfyUI logger implementation not found')
+path.write_text(text.replace(old, new, 1))
+PY
+
 COPY --from=sage-builder /wheelhouse/sageattention-2.2.0-*.whl /tmp/
 RUN /opt/venv/bin/pip install --no-cache-dir --no-deps /tmp/sageattention-2.2.0-*.whl && \
     rm -f /tmp/sageattention-2.2.0-*.whl
