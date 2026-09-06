@@ -7,9 +7,21 @@ COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 PROFILE="${MODEL_PROFILE:-mxfp8_blackwell_candidate}"
 VOLUME_ROOT="${MODEL_VOLUME_PATH:-/runpod-volume}"
 MODELS="${COMFYUI_PATH}/models"
+export SAGE_STARTUP_ERROR_FILE="${SAGE_STARTUP_ERROR_FILE:-/tmp/h3-sage-startup-error.log}"
 
 log() { printf '[h3-sage] %s\n' "$*"; }
-fatal() { log "FATAL: $*" >&2; exit 1; }
+record_error() { printf '[h3-sage] %s\n' "$*" >> "$SAGE_STARTUP_ERROR_FILE"; }
+fatal() {
+  log "FATAL: $*" >&2
+  record_error "FATAL: $*"
+  if [[ -x "$PYTHON_BIN" && -f /handler.py ]]; then
+    log "starting diagnostic-only handler"
+    exec "$PYTHON_BIN" /handler.py
+  fi
+  exit 1
+}
+
+: > "$SAGE_STARTUP_ERROR_FILE"
 
 on_exit() {
   local rc=$?
@@ -56,7 +68,7 @@ fi
 
 # This uses the same public entry point that ComfyUI 0.32 calls. Importing the
 # package alone is insufficient because its CUDA extension is lazy-loaded.
-"$PYTHON_BIN" - <<'PY'
+if ! "$PYTHON_BIN" - <<'PY' 2> >(tee -a "$SAGE_STARTUP_ERROR_FILE" >&2)
 import importlib.metadata
 import torch
 from sageattention import sageattn
@@ -89,8 +101,13 @@ print(
     flush=True,
 )
 PY
+then
+  record_error "SageAttention preflight failed; ComfyUI was not started"
+  log "SageAttention preflight failed; starting diagnostic-only handler"
+  exec "$PYTHON_BIN" /handler.py
+fi
 
-"$PYTHON_BIN" - <<'PY'
+if ! "$PYTHON_BIN" - <<'PY' 2> >(tee -a "$SAGE_STARTUP_ERROR_FILE" >&2)
 import os
 import subprocess
 import sys
@@ -138,6 +155,11 @@ else:
     proc.terminate()
     raise SystemExit("ComfyUI did not become ready within 180 seconds")
 PY
+then
+  record_error "ComfyUI startup failed; serving diagnostic-only version probe"
+  log "ComfyUI startup failed; starting diagnostic-only handler"
+  exec "$PYTHON_BIN" /handler.py
+fi
 
 log "starting Serverless handler"
 exec "$PYTHON_BIN" /handler.py

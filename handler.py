@@ -304,6 +304,25 @@ def _wait_comfy(timeout=300):
     return False
 
 
+
+def _sage_startup_diagnostic():
+    """Return startup diagnostics without queuing inference when Sage failed."""
+    path = os.getenv("SAGE_STARTUP_ERROR_FILE")
+    if not path:
+        return None
+    try:
+        text = pathlib.Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.strip():
+        return None
+    return {
+        "status": "startup_failed",
+        "worker_version": "h3",
+        "protocol_version": 1,
+        "startup_error": text[-12000:],
+    }
+
 def _run_runonrunpod(job):
     """Compatibility path for the installed ComfyUI-RunOnRunpod plugin.
 
@@ -314,7 +333,10 @@ def _run_runonrunpod(job):
     import requests
     inp = dict(job.get("input") or {})
     action = inp.get("action")
+    startup_diagnostic = _sage_startup_diagnostic()
     if action == "version":
+        if startup_diagnostic:
+            return startup_diagnostic
         ready = _wait_comfy()
         try:
             import torch
@@ -324,6 +346,8 @@ def _run_runonrunpod(job):
         return {"status": "ok" if ready else "comfy_not_ready", "worker_version": "h3",
                 "protocol_version": 1, "cuda_version": cuda, "pytorch_version": torch_version,
                 "comfyui_version": os.getenv("COMFYUI_VERSION", "0.32.0")}
+    if startup_diagnostic:
+        return startup_diagnostic | {"error": "inference disabled until Sage startup passes"}
     if action == "node_list":
         return {"node_list": list(requests.get(f"{COMFY}/object_info", timeout=120).json())}
     if action == "fetch_models":
